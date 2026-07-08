@@ -3,6 +3,11 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { mergeOcrResults, parseInbodyOcrText, type OcrFields } from "@/lib/inbody-ocr";
+import {
+  extractTextFromPdf,
+  parseInbodyText,
+  summarizeParseResult,
+} from "@/lib/inbody-text";
 import { preprocessInbodyVariants } from "@/lib/ocr-preprocess";
 
 type FormValues = {
@@ -35,15 +40,24 @@ const FIELD_LABELS: Record<keyof OcrFields, string> = {
   basalMetabolicRate: "기초대사량",
 };
 
+const SAMPLE_TEXT = `체중 71.2 kg
+골격근량 30.8 kg
+체지방률 24.1 %
+BMI 24.6
+체지방량 17.2 kg
+내장지방 8
+기초대사량 1480`;
+
 export function InbodyForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [ocrMessage, setOcrMessage] = useState("");
+  const [parseLoading, setParseLoading] = useState(false);
+  const [parseProgress, setParseProgress] = useState(0);
+  const [parseMessage, setParseMessage] = useState("");
   const [values, setValues] = useState<FormValues>(emptyValues);
+  const [rawText, setRawText] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
 
   function applyOcrFields(fields: OcrFields) {
@@ -58,15 +72,37 @@ export function InbodyForm() {
     }));
   }
 
-  async function runOcr(file: File) {
-    if (!file.type.startsWith("image/")) {
-      setOcrMessage("이미지 파일(jpg, png 등)만 자동 인식할 수 있습니다.");
+  function applyParsedText(text: string, source: "paste" | "pdf") {
+    const parsed = parseInbodyText(text, source);
+    if (parsed.foundFields.length === 0) {
+      setParseMessage(summarizeParseResult(parsed, FIELD_LABELS));
+      return false;
+    }
+    applyOcrFields(parsed);
+    setParseMessage(summarizeParseResult(parsed, FIELD_LABELS));
+    return true;
+  }
+
+  async function handleParsePastedText() {
+    setError("");
+    setParseMessage("");
+    const text = rawText.trim();
+    if (!text) {
+      setParseMessage("인바디 결과 텍스트를 붙여넣은 뒤 분석해주세요.");
       return;
     }
+    setParseLoading(true);
+    try {
+      applyParsedText(text, "paste");
+    } finally {
+      setParseLoading(false);
+    }
+  }
 
-    setOcrLoading(true);
-    setOcrProgress(0);
-    setOcrMessage("여러 방식으로 이미지를 보정하며 수치를 인식하는 중입니다...");
+  async function runImageOcr(file: File) {
+    setParseLoading(true);
+    setParseProgress(0);
+    setParseMessage("이미지에서 텍스트를 인식하는 중입니다... (이미지 OCR은 보조 기능)");
     setError("");
 
     try {
@@ -75,19 +111,16 @@ export function InbodyForm() {
       const worker = await createWorker("kor+eng", 1, {
         logger: (m) => {
           if (m.status === "recognizing text" && typeof m.progress === "number") {
-            setOcrProgress(Math.round(m.progress * 100));
+            setParseProgress(Math.round(m.progress * 100));
           }
         },
       });
 
-      const psmModes = [PSM.AUTO, PSM.SINGLE_BLOCK, PSM.SPARSE_TEXT];
+      const psmModes = [PSM.AUTO, PSM.SINGLE_BLOCK];
       const texts: string[] = [];
-
-      // Limit combinations to keep runtime reasonable on mobile
       const selectedVariants = [
         variants.find((v) => v.name === "original"),
         variants.find((v) => v.name === "gray-mild"),
-        variants.find((v) => v.name === "soft-bin"),
       ].filter(Boolean) as typeof variants;
 
       let pass = 0;
@@ -96,7 +129,7 @@ export function InbodyForm() {
       for (const variant of selectedVariants) {
         for (const psm of psmModes) {
           pass += 1;
-          setOcrMessage(`인식 중... (${pass}/${totalPasses})`);
+          setParseMessage(`이미지 OCR 중... (${pass}/${totalPasses})`);
           await worker.setParameters({
             tessedit_pageseg_mode: psm,
             preserve_interword_spaces: "1",
@@ -109,42 +142,61 @@ export function InbodyForm() {
 
       await worker.terminate();
 
-      const parsedResults = texts.map((text) => parseInbodyOcrText(text));
-      const parsed = mergeOcrResults(parsedResults);
-
+      const parsed = mergeOcrResults(texts.map((text) => parseInbodyOcrText(text)));
       if (parsed.foundFields.length === 0) {
-        setOcrMessage(
-          "인바디 수치를 찾지 못했습니다. 결과지 전체가 보이는 선명한 사진을 다시 올리거나 수동으로 입력해주세요.",
+        setParseMessage(
+          "이미지에서 수치를 찾지 못했습니다. 위의 텍스트 붙여넣기나 PDF를 사용하면 정확도가 훨씬 높습니다.",
         );
         return;
       }
 
       applyOcrFields(parsed);
-
-      const found = parsed.foundFields.map((f) => FIELD_LABELS[f]).join(", ");
-      const confidenceText =
-        parsed.confidence === "high"
-          ? "인식 완료"
-          : parsed.confidence === "partial"
-            ? "일부 인식"
-            : "인식률 낮음";
-
-      setOcrMessage(
-        `${confidenceText}: ${found} 항목을 자동 입력했습니다. 값을 확인·수정한 뒤 저장해주세요.`,
+      setParseMessage(
+        summarizeParseResult({ ...parsed, source: "image", sourceLabel: "이미지 OCR" }, FIELD_LABELS),
       );
     } catch {
-      setOcrMessage("OCR 처리 중 오류가 발생했습니다. 수동으로 입력해주세요.");
+      setParseMessage("이미지 OCR 처리 중 오류가 발생했습니다. 텍스트 붙여넣기를 이용해주세요.");
     } finally {
-      setOcrLoading(false);
-      setOcrProgress(0);
+      setParseLoading(false);
+      setParseProgress(0);
     }
   }
 
-  async function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
-    setImageFile(file);
-    setOcrMessage("");
-    if (file) await runOcr(file);
+    setParseMessage("");
+    setError("");
+    if (!file) return;
+
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+      setImageFile(null);
+      setParseLoading(true);
+      setParseMessage("PDF에서 텍스트를 추출하는 중입니다...");
+      try {
+        const text = await extractTextFromPdf(file);
+        setRawText(text);
+        if (!text.trim()) {
+          setParseMessage(
+            "PDF에서 텍스트를 찾지 못했습니다. 스캔본(이미지 PDF)일 수 있습니다. 텍스트를 복사해 붙여넣거나 사진을 올려주세요.",
+          );
+          return;
+        }
+        applyParsedText(text, "pdf");
+      } catch {
+        setParseMessage("PDF 텍스트 추출에 실패했습니다. 텍스트를 복사해 붙여넣어주세요.");
+      } finally {
+        setParseLoading(false);
+      }
+      return;
+    }
+
+    if (file.type.startsWith("image/")) {
+      setImageFile(file);
+      await runImageOcr(file);
+      return;
+    }
+
+    setParseMessage("지원 형식: 텍스트 붙여넣기, PDF, 이미지(jpg/png)");
   }
 
   function updateField(name: keyof FormValues, value: string) {
@@ -180,55 +232,83 @@ export function InbodyForm() {
 
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
+        <p className="font-medium">정확도 높은 입력 순서</p>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+          <li>인바디 앱/웹/결과 PDF에서 텍스트 복사 → 아래에 붙여넣기</li>
+          <li>또는 텍스트가 있는 PDF 업로드</li>
+          <li>사진 OCR은 보조 수단 (인식률이 낮을 수 있음)</li>
+        </ol>
+      </div>
+
       <div>
-        <label className="mb-1 block text-sm font-medium">인바디 결과지 사진</label>
-        <input
-          name="image"
-          type="file"
-          accept="image/*"
-          onChange={handleImageChange}
-          className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+        <label className="mb-1 block text-sm font-medium">인바디 결과 텍스트 붙여넣기 (권장)</label>
+        <textarea
+          value={rawText}
+          onChange={(e) => setRawText(e.target.value)}
+          rows={7}
+          className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+          placeholder={`예시)\n${SAMPLE_TEXT}`}
         />
-        <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
-          <p className="font-medium">업로드 팁 (정확도↑)</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            <li>갤러리에서 결과지 사진을 업로드하거나, 기기에서 직접 촬영할 수 있습니다</li>
-            <li>결과지 전체가 보이게, 밝고 정면에서 찍은 사진이 좋습니다</li>
-            <li>인식 후 숫자는 반드시 한번 확인해주세요</li>
-          </ul>
-        </div>
-        {ocrLoading && (
-          <div className="mt-3">
-            <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
-              <div
-                className="h-full bg-emerald-500 transition-all"
-                style={{ width: `${ocrProgress}%` }}
-              />
-            </div>
-            <p className="mt-1 text-xs text-emerald-700">OCR 진행 중... {ocrProgress}%</p>
-          </div>
-        )}
-        {ocrMessage && (
-          <p
-            className={`mt-2 text-sm ${
-              ocrMessage.includes("오류") || ocrMessage.includes("못했")
-                ? "text-amber-700"
-                : "text-emerald-700"
-            }`}
-          >
-            {ocrMessage}
-          </p>
-        )}
-        {imageFile && !ocrLoading && (
+        <div className="mt-2 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => runOcr(imageFile)}
-            className="mt-2 text-sm text-emerald-700 underline hover:text-emerald-800"
+            onClick={handleParsePastedText}
+            disabled={parseLoading}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
           >
-            OCR 다시 실행
+            텍스트 분석하기
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              setRawText(SAMPLE_TEXT);
+              setParseMessage("");
+            }}
+            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            예시 채우기
+          </button>
+        </div>
       </div>
+
+      <div>
+        <label className="mb-1 block text-sm font-medium">파일 업로드 (PDF 권장 / 이미지 보조)</label>
+        <input
+          name="file"
+          type="file"
+          accept="application/pdf,image/*"
+          onChange={handleFileChange}
+          className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+        />
+        <p className="mt-1 text-xs text-zinc-500">
+          PDF에 선택 가능한 텍스트가 있으면 거의 정확합니다. 스캔 PDF/사진은 OCR로 처리합니다.
+        </p>
+      </div>
+
+      {parseLoading && (
+        <div>
+          <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
+            <div
+              className="h-full bg-emerald-500 transition-all"
+              style={{ width: `${Math.max(parseProgress, 12)}%` }}
+            />
+          </div>
+          <p className="mt-1 text-xs text-emerald-700">처리 중... {parseProgress || ""}</p>
+        </div>
+      )}
+
+      {parseMessage && (
+        <p
+          className={`text-sm ${
+            parseMessage.includes("오류") || parseMessage.includes("못했")
+              ? "text-amber-700"
+              : "text-emerald-700"
+          }`}
+        >
+          {parseMessage}
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -325,7 +405,7 @@ export function InbodyForm() {
 
       <button
         type="submit"
-        disabled={loading || ocrLoading}
+        disabled={loading || parseLoading}
         className="w-full rounded-lg bg-emerald-600 py-3 font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
       >
         {loading ? "분석 중..." : "맞춤 추천 받기"}
