@@ -1,13 +1,26 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { DatabaseUnavailableNotice } from "@/components/DatabaseUnavailableNotice";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isDatabaseUnavailableError } from "@/lib/db-errors";
 import { InbodyForm } from "@/components/InbodyForm";
 
 export default async function NewInbodyPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!(await prisma.profile.findUnique({ where: { userId: session.userId } }))) redirect("/onboarding");
+
+  try {
+    if (!(await prisma.profile.findUnique({ where: { userId: session.userId } }))) {
+      redirect("/onboarding");
+    }
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      return <DatabaseUnavailableNotice />;
+    }
+    throw error;
+  }
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
       <h1 className="text-2xl font-bold">인바디 결과 입력</h1>

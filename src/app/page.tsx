@@ -2,12 +2,22 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isDatabaseUnavailableError } from "@/lib/db-errors";
 
 export default async function HomePage() {
   const session = await getSession();
   if (session) {
-    const profile = await prisma.profile.findUnique({ where: { userId: session.userId } });
-    redirect(profile ? "/dashboard" : "/onboarding");
+    try {
+      const profile = await prisma.profile.findUnique({ where: { userId: session.userId } });
+      redirect(profile ? "/dashboard" : "/onboarding");
+    } catch (error) {
+      if (isDatabaseUnavailableError(error)) {
+        // 랜딩에서는 DB 연결 실패 시에도 기본 소개 화면을 보여줍니다.
+      }
+      else {
+        throw error;
+      }
+    }
   }
   return (
     <div className="mx-auto max-w-5xl px-4 py-16">

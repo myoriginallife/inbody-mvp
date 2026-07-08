@@ -1,9 +1,11 @@
 import Link from "next/link";
 import Image from "next/image";
 import { redirect } from "next/navigation";
+import { DatabaseUnavailableNotice } from "@/components/DatabaseUnavailableNotice";
 import { getSession } from "@/lib/auth";
 import { compareWithPrevious } from "@/lib/comparison";
 import { prisma } from "@/lib/db";
+import { isDatabaseUnavailableError } from "@/lib/db-errors";
 import type { DietPlan, ExercisePlan } from "@/lib/recommendations";
 import type { Goal } from "@/lib/validations";
 import { ComparisonSection } from "@/components/ComparisonSection";
@@ -15,10 +17,24 @@ type Props = { searchParams: Promise<{ record?: string }> };
 export default async function DashboardPage({ searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
-  const profile = await prisma.profile.findUnique({ where: { userId: session.userId } });
+
+  let profile;
+  let records;
+  try {
+    profile = await prisma.profile.findUnique({ where: { userId: session.userId } });
+    records = await prisma.inbodyRecord.findMany({
+      where: { userId: session.userId },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      return <DatabaseUnavailableNotice />;
+    }
+    throw error;
+  }
+
   if (!profile) redirect("/onboarding");
   const params = await searchParams;
-  const records = await prisma.inbodyRecord.findMany({ where: { userId: session.userId }, orderBy: { createdAt: "desc" } });
   const record = records.find((r) => r.id === params.record) ?? records[0] ?? null;
 
   if (!record) {

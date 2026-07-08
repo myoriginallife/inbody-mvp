@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { parseInbodyOcrText, type OcrFields } from "@/lib/inbody-ocr";
+import { preprocessInbodyImage } from "@/lib/ocr-preprocess";
 
 type FormValues = {
   weight: string;
@@ -22,6 +23,16 @@ const emptyValues: FormValues = {
   bodyFatMass: "",
   visceralFat: "",
   basalMetabolicRate: "",
+};
+
+const FIELD_LABELS: Record<keyof OcrFields, string> = {
+  weight: "체중",
+  skeletalMuscle: "골격근량",
+  bodyFatPercent: "체지방률",
+  bmi: "BMI",
+  bodyFatMass: "체지방량",
+  visceralFat: "내장지방",
+  basalMetabolicRate: "기초대사량",
 };
 
 export function InbodyForm() {
@@ -55,42 +66,41 @@ export function InbodyForm() {
 
     setOcrLoading(true);
     setOcrProgress(0);
-    setOcrMessage("이미지에서 텍스트를 인식하는 중입니다...");
+    setOcrMessage("이미지를 보정한 뒤 수치를 인식하는 중입니다...");
     setError("");
 
     try {
-      const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("kor+eng", undefined, {
+      const prepared = await preprocessInbodyImage(file);
+      const { createWorker, PSM } = await import("tesseract.js");
+      const worker = await createWorker("kor+eng", 1, {
         logger: (m) => {
-          if (m.status === "recognizing text" && m.progress) {
+          if (m.status === "recognizing text" && typeof m.progress === "number") {
             setOcrProgress(Math.round(m.progress * 100));
           }
         },
       });
 
-      const { data } = await worker.recognize(file);
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+
+      const { data } = await worker.recognize(prepared);
       await worker.terminate();
 
       const parsed = parseInbodyOcrText(data.text);
 
       if (parsed.foundFields.length === 0) {
-        setOcrMessage("인바디 수치를 찾지 못했습니다. 사진을 선명하게 다시 촬영하거나 수동으로 입력해주세요.");
+        setOcrMessage(
+          "인바디 수치를 찾지 못했습니다. 결과지 전체를 밝고 정면에서 다시 촬영하거나 수동으로 입력해주세요.",
+        );
         return;
       }
 
       applyOcrFields(parsed);
 
-      const fieldLabels: Record<string, string> = {
-        weight: "체중",
-        skeletalMuscle: "골격근량",
-        bodyFatPercent: "체지방률",
-        bmi: "BMI",
-        bodyFatMass: "체지방량",
-        visceralFat: "내장지방",
-        basalMetabolicRate: "기초대사량",
-      };
-
-      const found = parsed.foundFields.map((f) => fieldLabels[f]).join(", ");
+      const found = parsed.foundFields.map((f) => FIELD_LABELS[f]).join(", ");
       const confidenceText =
         parsed.confidence === "high"
           ? "인식 완료"
@@ -155,12 +165,18 @@ export function InbodyForm() {
           name="image"
           type="file"
           accept="image/*"
+          capture="environment"
           onChange={handleImageChange}
           className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
         />
-        <p className="mt-1 text-xs text-zinc-500">
-          사진을 선택하면 OCR로 수치를 자동 인식합니다. 인식 결과는 반드시 확인해주세요.
-        </p>
+        <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
+          <p className="font-medium">촬영 팁 (정확도↑)</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            <li>결과지 전체를 정면에서, 그림자가 없게 촬영</li>
+            <li>흐리거나 기울어진 사진보다 밝은 원본이 좋습니다</li>
+            <li>인식 후 숫자는 반드시 한번 확인해주세요</li>
+          </ul>
+        </div>
         {ocrLoading && (
           <div className="mt-3">
             <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
