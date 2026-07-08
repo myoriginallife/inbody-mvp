@@ -165,15 +165,14 @@ export function InbodyForm() {
           name="image"
           type="file"
           accept="image/*"
-          capture="environment"
           onChange={handleImageChange}
           className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
         />
         <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
-          <p className="font-medium">촬영 팁 (정확도↑)</p>
+          <p className="font-medium">업로드 팁 (정확도↑)</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            <li>결과지 전체를 정면에서, 그림자가 없게 촬영</li>
-            <li>흐리거나 기울어진 사진보다 밝은 원본이 좋습니다</li>
+            <li>갤러리에서 결과지 사진을 업로드하거나, 기기에서 직접 촬영할 수 있습니다</li>
+            <li>결과지 전체가 보이게, 밝고 정면에서 찍은 사진이 좋습니다</li>
             <li>인식 후 숫자는 반드시 한번 확인해주세요</li>
           </ul>
         </div>
