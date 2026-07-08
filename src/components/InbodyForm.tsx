@@ -2,8 +2,8 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { parseInbodyOcrText, type OcrFields } from "@/lib/inbody-ocr";
-import { preprocessInbodyImage } from "@/lib/ocr-preprocess";
+import { mergeOcrResults, parseInbodyOcrText, type OcrFields } from "@/lib/inbody-ocr";
+import { preprocessInbodyVariants } from "@/lib/ocr-preprocess";
 
 type FormValues = {
   weight: string;
@@ -66,11 +66,11 @@ export function InbodyForm() {
 
     setOcrLoading(true);
     setOcrProgress(0);
-    setOcrMessage("이미지를 보정한 뒤 수치를 인식하는 중입니다...");
+    setOcrMessage("여러 방식으로 이미지를 보정하며 수치를 인식하는 중입니다...");
     setError("");
 
     try {
-      const prepared = await preprocessInbodyImage(file);
+      const variants = await preprocessInbodyVariants(file);
       const { createWorker, PSM } = await import("tesseract.js");
       const worker = await createWorker("kor+eng", 1, {
         logger: (m) => {
@@ -80,20 +80,41 @@ export function InbodyForm() {
         },
       });
 
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-        preserve_interword_spaces: "1",
-        user_defined_dpi: "300",
-      });
+      const psmModes = [PSM.AUTO, PSM.SINGLE_BLOCK, PSM.SPARSE_TEXT];
+      const texts: string[] = [];
 
-      const { data } = await worker.recognize(prepared);
+      // Limit combinations to keep runtime reasonable on mobile
+      const selectedVariants = [
+        variants.find((v) => v.name === "original"),
+        variants.find((v) => v.name === "gray-mild"),
+        variants.find((v) => v.name === "soft-bin"),
+      ].filter(Boolean) as typeof variants;
+
+      let pass = 0;
+      const totalPasses = selectedVariants.length * psmModes.length;
+
+      for (const variant of selectedVariants) {
+        for (const psm of psmModes) {
+          pass += 1;
+          setOcrMessage(`인식 중... (${pass}/${totalPasses})`);
+          await worker.setParameters({
+            tessedit_pageseg_mode: psm,
+            preserve_interword_spaces: "1",
+            user_defined_dpi: "300",
+          });
+          const { data } = await worker.recognize(variant.blob);
+          if (data.text?.trim()) texts.push(data.text);
+        }
+      }
+
       await worker.terminate();
 
-      const parsed = parseInbodyOcrText(data.text);
+      const parsedResults = texts.map((text) => parseInbodyOcrText(text));
+      const parsed = mergeOcrResults(parsedResults);
 
       if (parsed.foundFields.length === 0) {
         setOcrMessage(
-          "인바디 수치를 찾지 못했습니다. 결과지 전체를 밝고 정면에서 다시 촬영하거나 수동으로 입력해주세요.",
+          "인바디 수치를 찾지 못했습니다. 결과지 전체가 보이는 선명한 사진을 다시 올리거나 수동으로 입력해주세요.",
         );
         return;
       }
