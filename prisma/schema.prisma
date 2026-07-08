@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  password      String
+  consentedAt   DateTime
+  createdAt     DateTime       @default(now())
+  profile       Profile?
+  inbodyRecords InbodyRecord[]
+}
+
+model Profile {
+  id                  String  @id @default(cuid())
+  userId              String  @unique
+  user                User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gender              String
+  age                 Int
+  height              Float
+  goal                String
+  activityLevel       String
+  onboardingCompleted Boolean @default(true)
+}
+
+model InbodyRecord {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weight             Float
+  skeletalMuscle     Float
+  bodyFatMass        Float?
+  bodyFatPercent     Float
+  bmi                Float
+  visceralFat        Int?
+  basalMetabolicRate Int?
+  imagePath          String?
+  summary            String
+  dietPlan           String
+  exercisePlan       String
+  rationales         String
+  createdAt          DateTime @default(now())
+}
