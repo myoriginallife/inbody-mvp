@@ -1,25 +1,6 @@
-import { redirect } from "next/navigation";
-import { DatabaseUnavailableNotice } from "@/components/DatabaseUnavailableNotice";
-import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-import { isDatabaseUnavailableError } from "@/lib/db-errors";
 import { OnboardingForm } from "@/components/OnboardingForm";
 
-export default async function OnboardingPage() {
-  const session = await getSession();
-  if (!session) redirect("/login");
-
-  try {
-    if (await prisma.profile.findUnique({ where: { userId: session.userId } })) {
-      redirect("/dashboard");
-    }
-  } catch (error) {
-    if (isDatabaseUnavailableError(error)) {
-      return <DatabaseUnavailableNotice />;
-    }
-    throw error;
-  }
-
+export default function OnboardingPage() {
   return (
     <div className="mx-auto max-w-lg px-4 py-12">
       <h1 className="text-2xl font-bold">기본 정보 입력</h1>

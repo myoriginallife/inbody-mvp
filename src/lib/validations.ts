@@ -19,17 +19,6 @@ export const GENDERS = [
   { value: "female", label: "여성" },
 ] as const;
 
-export const registerSchema = z.object({
-  email: z.string().email("올바른 이메일을 입력해주세요"),
-  password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
-  consent: z.literal(true, { error: "개인정보 및 건강정보 수집에 동의해주세요" }),
-});
-
-export const loginSchema = z.object({
-  email: z.string().email("올바른 이메일을 입력해주세요"),
-  password: z.string().min(1, "비밀번호를 입력해주세요"),
-});
-
 export const profileSchema = z.object({
   gender: z.enum(["male", "female"]),
   age: z.coerce.number().int().min(14).max(100),
