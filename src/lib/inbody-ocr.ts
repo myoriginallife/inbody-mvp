@@ -338,3 +338,22 @@ export function mergeOcrResults(results: OcrParseResult[]): OcrParseResult {
 
   return { ...merged, foundFields, confidence, rawTextPreview: bestPreview };
 }
+
+export function summarizeParseResult(
+  result: OcrParseResult,
+  fieldLabels: Record<keyof OcrFields, string>,
+) {
+  if (result.foundFields.length === 0) {
+    return "이미지에서 인바디 수치를 찾지 못했습니다. 수동으로 입력해주세요.";
+  }
+
+  const found = result.foundFields.map((f) => fieldLabels[f]).join(", ");
+  const confidenceText =
+    result.confidence === "high"
+      ? "인식 완료"
+      : result.confidence === "partial"
+        ? "일부 인식"
+        : "인식률 낮음";
+
+  return `${confidenceText}: ${found} 항목을 자동 입력했습니다. 값을 확인·수정한 뒤 저장해주세요.`;
+}

@@ -2,30 +2,34 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ACTIVITY_LEVELS, GENDERS, GOALS } from "@/lib/validations";
+import { saveProfile } from "@/lib/client-storage";
+import { ACTIVITY_LEVELS, GENDERS, GOALS, profileSchema } from "@/lib/validations";
 
 export function OnboardingForm() {
   const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
     setLoading(true);
     const form = new FormData(e.currentTarget);
-    try {
-      const res = await fetch("/api/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gender: form.get("gender"), age: form.get("age"), height: form.get("height"), goal: form.get("goal"), activityLevel: form.get("activityLevel") }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error ?? "저장에 실패했습니다"); return; }
-      router.push("/inbody/new");
-      router.refresh();
-    } catch { setError("저장 중 오류가 발생했습니다"); }
-    finally { setLoading(false); }
+    const parsed = profileSchema.safeParse({
+      gender: form.get("gender"),
+      age: form.get("age"),
+      height: form.get("height"),
+      goal: form.get("goal"),
+      activityLevel: form.get("activityLevel"),
+    });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "입력값이 올바르지 않습니다");
+      setLoading(false);
+      return;
+    }
+    saveProfile(parsed.data);
+    router.push("/inbody/new");
+    setLoading(false);
   }
 
   return (
